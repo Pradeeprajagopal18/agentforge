@@ -18,7 +18,7 @@ FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 GREEN='\033[0;32m'; BLUE='\033[0;34m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 echo -e "${CYAN}"
-echo "  ⬡  P O W E R H O U S E"
+echo "  ⬡  A G E N T F O R G E"
 echo -e "     Powered by Claude Code${NC}"
 echo "─────────────────────────────────"
 
@@ -43,17 +43,22 @@ if [ ! -f "$BACKEND_DIR/.env" ]; then
 fi
 
 # ── Check Claude Code auth ────────────────────────────────────────
-# AgentForge needs Claude Code to be authenticated. Check common methods.
-CRED_FILE="$HOME/.claude/.credentials.json"
 HAS_AUTH=false
 [ -n "$ANTHROPIC_API_KEY" ]          && HAS_AUTH=true
 [ -n "$ANTHROPIC_AUTH_TOKEN" ]       && HAS_AUTH=true
 [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]    && HAS_AUTH=true
 [ -n "$CLAUDE_CODE_USE_BEDROCK" ]    && HAS_AUTH=true
 [ -n "$CLAUDE_CODE_USE_VERTEX" ]     && HAS_AUTH=true
-[ -f "$CRED_FILE" ]                  && HAS_AUTH=true
-# Also check backend/.env
+[ -f "$HOME/.claude/.credentials.json" ] && HAS_AUTH=true
+# Also check backend/.env for API key
 [ -f "$BACKEND_DIR/.env" ] && grep -q "^ANTHROPIC_API_KEY=.\+" "$BACKEND_DIR/.env" 2>/dev/null && HAS_AUTH=true
+# Also check settings.json for API key saved via the UI
+[ -f "$BACKEND_DIR/settings.json" ] && grep -q '"anthropic_api_key": *".\+' "$BACKEND_DIR/settings.json" 2>/dev/null && HAS_AUTH=true
+# Last resort: ask Claude Code itself (covers newer claude.ai OAuth via keychain)
+if [ "$HAS_AUTH" = false ] && command -v claude &>/dev/null; then
+  CLAUDE_STATUS=$(claude auth status 2>/dev/null || true)
+  echo "$CLAUDE_STATUS" | grep -qi '"loggedIn": *true' 2>/dev/null && HAS_AUTH=true
+fi
 
 if [ "$HAS_AUTH" = false ]; then
   echo -e "${YELLOW}⚠  No Claude Code authentication found.${NC}"
@@ -62,11 +67,13 @@ if [ "$HAS_AUTH" = false ]; then
   echo "  1. Add ANTHROPIC_API_KEY to backend/.env  (recommended)"
   echo "     Get a key at: https://console.anthropic.com"
   echo ""
-  echo "  2. Run: claude /login"
+  echo "  2. Run: claude auth login"
   echo "     Authenticate with your Claude.ai subscription (Pro/Max/Team)"
   echo ""
-  echo "  3. Set ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN,"
-  echo "     CLAUDE_CODE_USE_BEDROCK=1, or CLAUDE_CODE_USE_VERTEX=1"
+  echo "  3. Enter API key in the app: Settings → Authentication"
+  echo ""
+  echo "  4. Set CLAUDE_CODE_OAUTH_TOKEN in backend/.env"
+  echo "     Generate with: claude setup-token"
   echo ""
   echo -e "  ${CYAN}Continuing anyway — Claude Code will prompt for auth when first used.${NC}"
   echo ""
@@ -78,6 +85,9 @@ if [ ! -d "$BACKEND_DIR/.venv" ]; then
   python3 -m venv "$BACKEND_DIR/.venv"
   "$BACKEND_DIR/.venv/bin/pip" install -q -r "$BACKEND_DIR/requirements.txt"
   echo -e "${GREEN}✓ Python deps installed${NC}"
+else
+  # Ensure deps are up to date (handles new requirements after git pull)
+  "$BACKEND_DIR/.venv/bin/pip" install -q -r "$BACKEND_DIR/requirements.txt" 2>/dev/null || true
 fi
 
 # ── Install frontend deps ─────────────────────────────────────────
@@ -90,8 +100,7 @@ fi
 # ── Start backend ────────────────────────────────────────────────
 echo -e "${BLUE}▶ Starting backend on :${BACKEND_PORT}${NC}"
 cd "$BACKEND_DIR"
-source .venv/bin/activate
-python main.py &
+.venv/bin/python3 main.py &
 BACKEND_PID=$!
 
 # Wait for backend to be ready

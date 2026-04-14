@@ -99,6 +99,8 @@ export default function SettingsPanel({ onClose }) {
       if (!r.ok) throw new Error(await r.text())
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
+      // Refresh auth status so badge reflects newly saved API key
+      fetch(`${API}/health`).then(r => r.json()).then(setAuthStatus).catch(() => {})
     } catch (e) {
       setError(e.message)
     } finally {
@@ -177,35 +179,53 @@ export default function SettingsPanel({ onClose }) {
 
           {/* ── Authentication ── */}
           <Section title="Authentication" icon={KeyRound}>
+            {/* Status badge */}
             {authStatus && (
               <div style={s.authStatus}>
                 <div style={{
                   ...s.authBadge,
-                  background: authStatus.auth_method === 'none' ? '#1a0808' : '#0a180a',
-                  borderColor: authStatus.auth_method === 'none' ? '#3a1a1a' : '#1a3a1a',
+                  background: authStatus.auth_method === 'none' ? 'color-mix(in srgb, #f87171 8%, var(--bg1))' : 'color-mix(in srgb, #4ade80 8%, var(--bg1))',
+                  borderColor: authStatus.auth_method === 'none' ? 'color-mix(in srgb, #f87171 25%, var(--bd))' : 'color-mix(in srgb, #4ade80 25%, var(--bd))',
                 }}>
                   <ShieldCheck size={13} color={authStatus.auth_method === 'none' ? '#f87171' : '#4ade80'} />
                   <div>
                     <div style={{ ...s.authMethod, color: authStatus.auth_method === 'none' ? '#f87171' : '#4ade80' }}>
-                      {authStatus.auth_method === 'none' ? 'Not authenticated' : `Auth: ${authStatus.auth_method.replace('_', ' ')}`}
+                      {authStatus.auth_method === 'none' ? 'Not authenticated'
+                        : authStatus.auth_method === 'local' ? 'Authenticated via Claude Code (keychain)'
+                        : authStatus.auth_method === 'api_key' ? 'Authenticated via API Key'
+                        : `Auth: ${authStatus.auth_method.replace(/_/g, ' ')}`}
                     </div>
                     <div style={s.authDetail}>{authStatus.auth_detail}</div>
                   </div>
                 </div>
               </div>
             )}
+
+            {/* API Key input — works in Docker and locally */}
+            <label style={s.label}>Anthropic API Key</label>
+            <input
+              style={s.input}
+              type="password"
+              value={settings.anthropic_api_key || ''}
+              onChange={e => set('anthropic_api_key', e.target.value)}
+              placeholder="sk-ant-api03-…  (leave blank to use claude /login)"
+            />
             <p style={s.hint}>
-              AgentForge uses Claude Code for all AI — it handles authentication itself.
-              Choose <strong>one</strong> method (in priority order):
+              Saved in settings and applied immediately on Save. Works inside Docker.
+              Get a key at <strong>console.anthropic.com</strong> — billed per token.
             </p>
+
+            {/* Divider */}
+            <div style={s.authDivider}>
+              <span style={s.authDividerText}>or authenticate without an API key</span>
+            </div>
+
             <div style={s.authMethods}>
               {[
-                { label: 'ANTHROPIC_API_KEY', desc: 'Recommended. Set in backend/.env. Billed per token via Anthropic Console.' },
-                { label: 'claude /login', desc: 'Run this in your terminal to authenticate with your Claude.ai subscription (Pro/Max/Team). Credentials stored in your keychain.' },
-                { label: 'CLAUDE_CODE_OAUTH_TOKEN', desc: 'Long-lived token from `claude setup-token`. Good for servers/CI.' },
-                { label: 'ANTHROPIC_AUTH_TOKEN', desc: 'Bearer token for LLM gateway or proxy setups.' },
-                { label: 'CLAUDE_CODE_USE_BEDROCK=1', desc: 'Use AWS Bedrock with your standard AWS credential chain.' },
-                { label: 'CLAUDE_CODE_USE_VERTEX=1', desc: 'Use Google Cloud Vertex AI.' },
+                { label: 'claude auth login', desc: 'Run in your terminal — uses your Claude.ai Pro/Max/Team subscription via keychain. Does not work inside Docker.' },
+                { label: 'CLAUDE_CODE_OAUTH_TOKEN', desc: 'Generate with `claude setup-token`. Set in backend/.env. Works everywhere including Docker.' },
+                { label: 'CLAUDE_CODE_USE_BEDROCK=1', desc: 'AWS Bedrock — set in backend/.env with standard AWS credentials.' },
+                { label: 'CLAUDE_CODE_USE_VERTEX=1', desc: 'Google Vertex AI — set ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION in backend/.env.' },
               ].map((m, i) => (
                 <div key={i} style={s.authRow}>
                   <code style={s.authCode}>{m.label}</code>
@@ -456,8 +476,10 @@ const s = {
   authBadge:   { display: 'flex', alignItems: 'flex-start', gap: 8, padding: '9px 12px', borderRadius: 8, border: '1px solid' },
   authMethod:  { fontSize: 12, fontWeight: 600, fontFamily: "'DM Sans', sans-serif" },
   authDetail:  { fontSize: 11, color: 'var(--tx3)', fontFamily: "'Berkeley Mono', monospace", marginTop: 2 },
-  authMethods: { display: 'flex', flexDirection: 'column', gap: 7, marginTop: 8 },
-  authRow:     { display: 'flex', flexDirection: 'column', gap: 3, padding: '7px 10px', background: 'var(--bg1)', borderRadius: 6, border: '1px solid var(--bd)' },
+  authDivider: { display: 'flex', alignItems: 'center', gap: 8, margin: '12px 0 8px' },
+  authDividerText: { fontSize: 10, color: 'var(--tx5)', textTransform: 'uppercase', letterSpacing: 0.6, fontFamily: "'Berkeley Mono', monospace", whiteSpace: 'nowrap' },
+  authMethods: { display: 'flex', flexDirection: 'column', gap: 5 },
+  authRow:     { display: 'flex', flexDirection: 'column', gap: 3, padding: '6px 10px', background: 'var(--bg1)', borderRadius: 6, border: '1px solid var(--bd)' },
   authCode:    { fontSize: 11, color: 'var(--ac2)', fontFamily: "'Berkeley Mono', monospace" },
   authDesc:    { fontSize: 11, color: 'var(--tx4)', fontFamily: "'DM Sans', sans-serif" },
   cancelBtn: {

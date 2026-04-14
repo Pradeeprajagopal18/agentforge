@@ -11,6 +11,7 @@ DEFAULT_SETTINGS = {
     "mcp_servers": {},
     "team_prompts_path": "",
     "github_token": "",
+    "anthropic_api_key": "",
 }
 
 

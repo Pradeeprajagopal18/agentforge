@@ -3,8 +3,8 @@ REM start.bat — launch AgentForge on Windows
 setlocal enabledelayedexpansion
 
 echo.
-echo   ^| P O W E R H O U S E
-echo   ^| Powered by Claude Code
+echo   ^| AgentForge
+echo   ^| Powered by your choice of LLMs, including Claude 2, Gemini Pro, and more.
 echo ─────────────────────────────────
 
 REM ── Load ports from backend/.env ─────────────────────────────────

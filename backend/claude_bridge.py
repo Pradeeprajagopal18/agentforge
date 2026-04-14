@@ -18,12 +18,15 @@ class ClaudeBridge:
         mcp_config_path: str = None,
         model: str = None,
         system_prompt: str = None,
+        api_key: str = None,
     ):
-        self.working_dir = working_dir or os.path.expanduser("~")
+        requested = working_dir or os.path.expanduser("~")
+        self.working_dir = requested if os.path.isdir(requested) else os.path.expanduser("~")
         self.allowed_tools = allowed_tools or ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
         self.mcp_config_path = mcp_config_path
         self.model = model
         self.system_prompt = system_prompt
+        self.api_key = api_key
         self._process: asyncio.subprocess.Process | None = None
         self._interrupted = False
 
@@ -63,11 +66,13 @@ class ClaudeBridge:
         cmd  = self._build_cmd()
         env  = dict(os.environ)  # inherit everything — includes any CLAUDE_CODE_* vars
 
-        # Only forward the key if it was actually configured — an empty string
-        # overrides OAuth/keychain credentials, which we want to avoid.
-        api_key = env.get("ANTHROPIC_API_KEY", "").strip()
-        if not api_key:
-            env.pop("ANTHROPIC_API_KEY", None)  # let Claude Code fall through to next method
+        # Explicit api_key from settings takes highest priority.
+        # Fall back to env var. Never set an empty string (shadows keychain auth).
+        effective_key = (self.api_key or "").strip() or env.get("ANTHROPIC_API_KEY", "").strip()
+        if effective_key:
+            env["ANTHROPIC_API_KEY"] = effective_key
+        else:
+            env.pop("ANTHROPIC_API_KEY", None)  # let Claude Code fall through to keychain/OAuth
 
         self._process = await asyncio.create_subprocess_exec(
             *cmd,

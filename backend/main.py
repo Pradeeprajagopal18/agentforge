@@ -46,6 +46,7 @@ class SettingsPayload(BaseModel):
     mcp_servers:       dict = {}
     team_prompts_path: str  = ""
     github_token:      str  = ""
+    anthropic_api_key: str  = ""
 
 
 @app.get("/settings")
@@ -57,7 +58,27 @@ async def get_settings():
 async def post_settings(payload: SettingsPayload):
     data = payload.dict()
     data["working_dir"] = os.path.expanduser(data["working_dir"])
-    return save_settings(data)
+
+    # Apply API key to this process's environment immediately so the health
+    # check and future sessions reflect the new key without a restart.
+    api_key = data.get("anthropic_api_key", "").strip()
+    if api_key:
+        os.environ["ANTHROPIC_API_KEY"] = api_key
+    else:
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    result = save_settings(data)
+
+    # Reset all active sessions so every new message uses the latest settings
+    # (model, tools, system prompt, working dir, api key all take effect now).
+    for conv_id in list(sessions.keys()):
+        try:
+            await sessions[conv_id].stop()
+        except Exception:
+            pass
+    sessions.clear()
+
+    return result
 
 
 # ── File search (@mentions) ───────────────────────────────────────
@@ -86,37 +107,86 @@ async def files_read(path: str = Query(...)):
 
 # ── Health ────────────────────────────────────────────────────────
 
+async def _check_claude_auth() -> tuple[str, str]:
+    """
+    Ask Claude Code itself whether it is authenticated.
+    Returns (auth_method, auth_detail).
+
+    Priority:
+      1. Explicit env vars — checked instantly, no subprocess needed.
+      2. Credentials file  — ~/.claude/.credentials.json (older OAuth).
+      3. `claude auth status` — authoritative check for newer claude.ai
+         OAuth where credentials live in the system keychain (no JSON file).
+    """
+    # 1. Env-var or settings-stored API key — fastest, check first
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return "api_key", "ANTHROPIC_API_KEY is set"
+    # Also check settings.json (key may have been saved via UI)
+    try:
+        cfg = load_settings()
+        if cfg.get("anthropic_api_key", "").strip():
+            return "api_key", "API key configured in Settings"
+    except Exception:
+        pass
+    if os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
+        return "auth_token", "ANTHROPIC_AUTH_TOKEN is set (bearer/proxy)"
+    if os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
+        return "oauth_token", "CLAUDE_CODE_OAUTH_TOKEN is set"
+    if os.getenv("CLAUDE_CODE_USE_BEDROCK", "").strip():
+        return "bedrock", "AWS Bedrock (CLAUDE_CODE_USE_BEDROCK is set)"
+    if os.getenv("CLAUDE_CODE_USE_VERTEX", "").strip():
+        return "vertex", "Google Vertex AI (CLAUDE_CODE_USE_VERTEX is set)"
+
+    # 2. Credentials file (older `claude /login` or explicit token file)
+    cred_paths = [
+        os.path.expanduser("~/.claude/.credentials.json"),
+        os.path.expanduser("~/.config/claude/.credentials.json"),
+    ]
+    if any(os.path.exists(p) for p in cred_paths):
+        return "oauth_login", "OAuth credentials found (~/.claude/.credentials.json)"
+
+    # 3. Ask Claude Code — covers newer claude.ai OAuth (keychain) and any
+    #    other method Claude Code itself knows about but we cannot file-check.
+    try:
+        env = dict(os.environ)
+        env.pop("ANTHROPIC_API_KEY", None)  # don't let an empty key block keychain auth
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "auth", "status",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+        output = stdout.decode(errors="replace").strip()
+
+        # `claude auth status` may return JSON (newer versions) or plain text.
+        # JSON: {"loggedIn": true/false, "authMethod": "...", ...}
+        # Plain: "● Logged in to claude.ai\n  Account: user@email.com"
+        if proc.returncode == 0 and output:
+            try:
+                data = json.loads(output)
+                if data.get("loggedIn"):
+                    method = data.get("authMethod", "claude.ai")
+                    account = data.get("claudeAiAccount", {})
+                    email = account.get("emailAddress", "") if isinstance(account, dict) else ""
+                    detail = f"Logged in via {method}" + (f" ({email})" if email else "")
+                    return "local", detail
+                # loggedIn is false — not authenticated
+            except (json.JSONDecodeError, TypeError):
+                # Plain text output — check for "not logged in"
+                if "not logged in" not in output.lower():
+                    first_line = next((l.strip() for l in output.splitlines() if l.strip()), output[:80])
+                    return "local", first_line
+    except Exception:
+        pass  # claude not found or timed out — fall through
+
+    return "none", "No credentials found — run `claude auth login` or set ANTHROPIC_API_KEY"
+
+
 @app.get("/health")
 async def health():
     """Return backend status and which Claude Code auth method is configured."""
-    auth_method = "none"
-    auth_detail = "No credentials found — run `claude /login` or set ANTHROPIC_API_KEY"
-
-    if os.getenv("ANTHROPIC_API_KEY", "").strip():
-        auth_method = "api_key"
-        auth_detail = "ANTHROPIC_API_KEY is set"
-    elif os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
-        auth_method = "auth_token"
-        auth_detail = "ANTHROPIC_AUTH_TOKEN is set (bearer/proxy)"
-    elif os.getenv("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
-        auth_method = "oauth_token"
-        auth_detail = "CLAUDE_CODE_OAUTH_TOKEN is set"
-    elif os.getenv("CLAUDE_CODE_USE_BEDROCK", "").strip():
-        auth_method = "bedrock"
-        auth_detail = "AWS Bedrock (CLAUDE_CODE_USE_BEDROCK is set)"
-    elif os.getenv("CLAUDE_CODE_USE_VERTEX", "").strip():
-        auth_method = "vertex"
-        auth_detail = "Google Vertex AI (CLAUDE_CODE_USE_VERTEX is set)"
-    else:
-        # Check for OAuth credentials file (set by `claude /login`)
-        cred_paths = [
-            os.path.expanduser("~/.claude/.credentials.json"),
-            os.path.expanduser("~/.config/claude/.credentials.json"),
-        ]
-        if any(os.path.exists(p) for p in cred_paths):
-            auth_method = "oauth_login"
-            auth_detail = "OAuth credentials found (~/.claude/.credentials.json)"
-
+    auth_method, auth_detail = await _check_claude_auth()
     return {
         "status":      "ok",
         "auth_method": auth_method,
@@ -205,6 +275,17 @@ async def export_json_endpoint(conv_id: str):
 async def websocket_endpoint(websocket: WebSocket, conv_id: str):
     await websocket.accept()
 
+    # Clean up stale session if its subprocess has died
+    if conv_id in sessions:
+        existing = sessions[conv_id]
+        proc = existing.bridge._process
+        if proc is None or proc.returncode is not None:
+            try:
+                await existing.stop()
+            except Exception:
+                pass
+            del sessions[conv_id]
+
     if conv_id not in sessions:
         cfg = load_settings()
         bridge = ClaudeBridge(
@@ -213,6 +294,7 @@ async def websocket_endpoint(websocket: WebSocket, conv_id: str):
             mcp_config_path=os.path.expanduser("~/.claude/mcp.json"),
             model=cfg.get("model") or None,
             system_prompt=cfg.get("system_prompt") or None,
+            api_key=cfg.get("anthropic_api_key", "").strip() or None,
         )
         session = Session(id=conv_id, bridge=bridge)
         await session.start()
@@ -324,7 +406,8 @@ async def generate_title_and_push(conv_id: str, user_msg: str, asst_msg: str, we
 if __name__ == "__main__":
     import uvicorn
     backend_port = int(os.getenv("BACKEND_PORT", "9000"))
-    uvicorn.run("main:app", host="127.0.0.1", port=backend_port, reload=True)
+    host = os.getenv("BACKEND_HOST", "0.0.0.0")
+    uvicorn.run("main:app", host=host, port=backend_port, reload=True)
 
 
 

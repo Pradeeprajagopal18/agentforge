@@ -283,7 +283,7 @@ export default function App() {
 
   // ── Render ─────────────────────────────────────────────────────
   return (
-    <div style={{ ...st.app, zoom: fontScale }}>
+    <div style={st.app}>
       <Sidebar
         conversations={conversations} activeId={activeId}
         onSelect={selectConv} onNew={newConv} onDelete={deleteConv}
@@ -356,7 +356,7 @@ export default function App() {
 
             {/* ── Chat + Artifacts ── */}
             <div style={st.chatAndArtifacts}>
-              <div style={st.chatArea}>
+              <div style={{ ...st.chatArea, zoom: fontScale }}>
                 {messages.map((msg, i) => (
                   <div
                     key={i}
@@ -427,7 +427,7 @@ export default function App() {
             </div>
 
             {/* ── Input ── */}
-            <div style={st.inputArea}>
+            <div style={{ ...st.inputArea, zoom: fontScale }}>
               {attachments.length > 0 && (
                 <FileAttachment attachments={attachments} setAttachments={setAttachments} />
               )}
