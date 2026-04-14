@@ -1,0 +1,15 @@
+{
+  "model": "",
+  "system_prompt": "",
+  "working_dir": "/Users/dhanwin",
+  "allowed_tools": [
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Glob",
+    "Grep"
+  ],
+  "mcp_servers": {},
+  "team_prompts_path": ""
+}

@@ -1,0 +1,51 @@
+services:
+
+  # ── Backend (FastAPI + Claude Code CLI) ────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "${BACKEND_PORT:-9000}:9000"
+    volumes:
+      # Persist SQLite DB and settings across container restarts
+      - ./backend/conversations.db:/app/backend/conversations.db
+      - ./backend/settings.json:/app/backend/settings.json
+      # Mount ~/.claude so the container can use `claude /login` OAuth credentials.
+      # Remove this line if you are using ANTHROPIC_API_KEY instead.
+      - ${CLAUDE_DIR:-~/.claude}:/root/.claude:ro
+    env_file:
+      - ./backend/.env
+    environment:
+      BACKEND_PORT: "9000"
+      # Pass through auth vars from host environment if set
+      ANTHROPIC_API_KEY:       "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_AUTH_TOKEN:    "${ANTHROPIC_AUTH_TOKEN:-}"
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      CLAUDE_CODE_USE_BEDROCK: "${CLAUDE_CODE_USE_BEDROCK:-}"
+      CLAUDE_CODE_USE_VERTEX:  "${CLAUDE_CODE_USE_VERTEX:-}"
+      GITHUB_TOKEN:            "${GITHUB_TOKEN:-}"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── Frontend (Vite dev server) ──────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    environment:
+      # The browser connects directly to the published backend port on the host,
+      # so VITE_BACKEND_HOST must be the host address, not the Docker service name.
+      VITE_BACKEND_HOST: "${VITE_BACKEND_HOST:-localhost}"
+      VITE_BACKEND_PORT: "${BACKEND_PORT:-9000}"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
