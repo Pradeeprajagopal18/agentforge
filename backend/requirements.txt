@@ -4,3 +4,6 @@ websockets
 python-dotenv
 aiofiles
 pyyaml
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
