@@ -58,6 +58,6 @@ Mark `[ ]` → `[x]` when done.
 
 - [ ] **12. Per-provider model list in Settings**
   - Model dropdown updates based on selected provider.
-  - Claude: existing list. Copilot: `gpt-4o`, `o3`, etc. OpenAI-compatible: free-text input (model name varies by endpoint).
+  - Claude: existing list. Copilot: `gpt-4o`, `o3`, etc. OpenAI-compatible: free-text input (model name varies by endpoint).    
 
 
